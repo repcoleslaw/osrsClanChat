@@ -1,4 +1,5 @@
 const MAX_PLAYERS = 5;
+const MAX_SKILL_XP = 13034431;
 
 const API_BASE =
   typeof window !== "undefined" && window.__API_BASE__ != null && String(window.__API_BASE__).trim() !== ""
@@ -59,7 +60,8 @@ function readLocalClanState() {
           message: typeof p.message === "string" ? p.message.trim().slice(0, 240) : "",
           updatedAt: p.updatedAt != null ? String(p.updatedAt) : null,
           totalLevel: Number(p.totalLevel) || 0,
-          skills: typeof p.skills === "object" && p.skills ? p.skills : {}
+          skills: typeof p.skills === "object" && p.skills ? p.skills : {},
+          skillsXp: typeof p.skillsXp === "object" && p.skillsXp ? p.skillsXp : {}
         });
       }
     }
@@ -353,7 +355,8 @@ function initNewClanModal() {
       message: "",
       updatedAt: null,
       totalLevel: 0,
-      skills: {}
+      skills: {},
+      skillsXp: {}
     }));
 
     const submitBtn = newClanSubmit;
@@ -436,17 +439,20 @@ function playerStatusLine(player) {
 function parseHiscoresCsv(text) {
   const lines = text.trim().split(/\r?\n/);
   const skills = {};
+  const skillsXp = {};
 
   for (let i = 0; i < skillsOrder.length; i += 1) {
     const line = lines[i];
     if (!line) continue;
-    const [, level] = line.split(",");
+    const [, level, xp] = line.split(",");
     skills[skillsOrder[i]] = Number(level) || 0;
+    skillsXp[skillsOrder[i]] = Number(xp) || 0;
   }
 
   return {
     totalLevel: skills.overall || 0,
-    skills
+    skills,
+    skillsXp
   };
 }
 
@@ -472,6 +478,7 @@ async function refreshPlayer(index) {
     const data = await fetchHiscores(player.name);
     player.totalLevel = data.totalLevel;
     player.skills = data.skills;
+    player.skillsXp = data.skillsXp;
     player.updatedAt = new Date().toISOString();
     player.fetchStatus = "ok";
   } catch {
@@ -927,6 +934,7 @@ function renderSkillCards() {
     } else {
       SKILL_KEYS.forEach((key) => {
         const level = Number(player.skills[key]) || 0;
+        const xp = Number(player.skillsXp?.[key]) || 0;
         const row = document.createElement("div");
         row.className = "skill-meter";
 
@@ -939,8 +947,7 @@ function renderSkillCards() {
         track.className = "skill-meter__track";
         const fill = document.createElement("div");
         fill.className = "skill-meter__fill";
-        const cap = 99;
-        const pct = cap > 0 ? (Math.min(level, cap) / cap) * 100 : 0;
+        const pct = MAX_SKILL_XP > 0 ? (Math.min(Math.max(xp, 0), MAX_SKILL_XP) / MAX_SKILL_XP) * 100 : 0;
         fill.style.width = `${pct}%`;
         track.appendChild(fill);
 
