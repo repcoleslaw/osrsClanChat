@@ -128,7 +128,8 @@ const skillsOrder = [
   "farming",
   "runecraft",
   "hunter",
-  "construction"
+  "construction",
+  "sailing"
 ];
 
 /** Skills shown on each player card (excludes "overall" — total is shown in the card header). */
