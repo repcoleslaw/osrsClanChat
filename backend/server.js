@@ -10,7 +10,8 @@ const MAX_BOUNTIES = 80;
 const BOUNTY_TITLE_MAX = 200;
 const BOUNTY_DESC_MAX = 2000;
 
-const MONGODB_URI = process.env.MONGODB_URI;
+const MONGODB_URI =
+  typeof process.env.MONGODB_URI === "string" ? process.env.MONGODB_URI.trim() : "";
 const MONGODB_DB = process.env.MONGODB_DB || "osrsclanhub";
 const LEGACY_STATE_ID = "singleton";
 const CLANS_COLLECTION = "clans";
@@ -24,15 +25,22 @@ const defaultState = {
 /** @type {MongoClient | null} */
 let mongoClient = null;
 
+let migrationDone = false;
 /** @type {Promise<void> | null} */
-let migrationPromise = null;
+let migrationRunning = null;
+
+const MONGO_OPTIONS = {
+  serverSelectionTimeoutMS: 20_000,
+  connectTimeoutMS: 20_000,
+  maxPoolSize: 10
+};
 
 async function getDb() {
   if (!MONGODB_URI) {
     throw new Error("MONGODB_URI is not set");
   }
   if (!mongoClient) {
-    mongoClient = new MongoClient(MONGODB_URI);
+    mongoClient = new MongoClient(MONGODB_URI, MONGO_OPTIONS);
     await mongoClient.connect();
   }
   return mongoClient.db(MONGODB_DB);
@@ -180,53 +188,138 @@ async function migrateLegacySingletonIfNeeded(db) {
 }
 
 async function ensureMigrated(db) {
-  if (!migrationPromise) {
-    migrationPromise = migrateLegacySingletonIfNeeded(db).catch((err) => {
-      migrationPromise = null;
-      throw err;
-    });
+  if (migrationDone) return;
+  if (!migrationRunning) {
+    migrationRunning = migrateLegacySingletonIfNeeded(db)
+      .then(() => {
+        migrationDone = true;
+      })
+      .finally(() => {
+        migrationRunning = null;
+      });
   }
-  await migrationPromise;
+  await migrationRunning;
+}
+
+/** Legacy import must not take down clan listing if the old doc is corrupt. */
+async function ensureMigratedSafe(db) {
+  try {
+    await ensureMigrated(db);
+  } catch (err) {
+    console.error("Legacy clan migration failed (continuing without import):", err);
+  }
+}
+
+function idToString(v) {
+  if (v == null) return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "object" && typeof v.toHexString === "function") {
+    return v.toHexString();
+  }
+  return String(v);
+}
+
+function playerForApi(p) {
+  if (!p || typeof p !== "object") {
+    return { name: "", message: "", updatedAt: null, totalLevel: 0, skills: {} };
+  }
+  const skills = {};
+  if (p.skills && typeof p.skills === "object") {
+    for (const [k, v] of Object.entries(p.skills)) {
+      skills[k] = Number(v) || 0;
+    }
+  }
+  return {
+    name: cleanName(p.name),
+    message: String(p.message || "").trim().slice(0, 240),
+    updatedAt: p.updatedAt != null ? String(p.updatedAt) : null,
+    totalLevel: Number(p.totalLevel) || 0,
+    skills
+  };
+}
+
+function bountyForApi(b) {
+  if (!b || typeof b !== "object") return null;
+  return {
+    id: typeof b.id === "string" ? b.id : String(b.id || ""),
+    title: String(b.title || ""),
+    description: String(b.description || ""),
+    requester: cleanName(b.requester),
+    owner: b.owner ? cleanName(b.owner) : null,
+    state: String(b.state || "open"),
+    createdAt: b.createdAt != null ? String(b.createdAt) : new Date().toISOString(),
+    updatedAt: b.updatedAt != null ? String(b.updatedAt) : new Date().toISOString()
+  };
 }
 
 function clanToListItem(doc) {
+  if (!doc) return { id: "", name: "", playerCount: 0 };
   return {
-    id: doc._id,
-    name: doc.name || "",
+    id: idToString(doc._id),
+    name: String(doc.name ?? ""),
     playerCount: Array.isArray(doc.players) ? doc.players.length : 0
   };
 }
 
 function clanToApi(doc) {
+  if (!doc) {
+    return { id: "", name: "", players: [], bounties: [] };
+  }
+  const rawPlayers = Array.isArray(doc.players) ? doc.players : [];
+  const players = rawPlayers.map(playerForApi).filter((p) => p.name);
+  const rawBounties = Array.isArray(doc.bounties) ? doc.bounties : [];
+  const bounties = rawBounties.map(bountyForApi).filter((x) => x != null);
   return {
-    id: doc._id,
-    name: doc.name || "",
-    players: Array.isArray(doc.players) ? doc.players : [],
-    bounties: Array.isArray(doc.bounties) ? doc.bounties : []
+    id: idToString(doc._id),
+    name: String(doc.name ?? ""),
+    players,
+    bounties
   };
+}
+
+function requireMongoUri(res) {
+  if (MONGODB_URI) return true;
+  res.status(503).json({
+    error: "Database not configured",
+    detail: "Set MONGODB_URI in Render → Environment (full MongoDB connection string)."
+  });
+  return false;
+}
+
+function apiErrorMessage(err) {
+  const msg = err && typeof err.message === "string" ? err.message : String(err || "Unknown error");
+  return msg.length > 400 ? `${msg.slice(0, 400)}…` : msg;
 }
 
 app.get("/api/clans", async (_req, res) => {
   try {
+    if (!requireMongoUri(res)) return;
     const db = await getDb();
-    await ensureMigrated(db);
-    const docs = await db.collection(CLANS_COLLECTION).find({}).sort({ name: 1 }).toArray();
+    await ensureMigratedSafe(db);
+    const docs = await db.collection(CLANS_COLLECTION).find({}).toArray();
+    docs.sort((a, b) =>
+      String(a.name ?? "").localeCompare(String(b.name ?? ""), undefined, { sensitivity: "base" })
+    );
     res.json({ clans: docs.map(clanToListItem) });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Could not load clans" });
+    console.error("GET /api/clans", err);
+    res.status(500).json({
+      error: "Could not load clans",
+      detail: apiErrorMessage(err)
+    });
   }
 });
 
 app.get("/api/clans/:id", async (req, res) => {
   try {
+    if (!requireMongoUri(res)) return;
     const id = String(req.params.id || "");
     if (!UUID_RE.test(id)) {
       res.status(400).json({ error: "Invalid clan id" });
       return;
     }
     const db = await getDb();
-    await ensureMigrated(db);
+    await ensureMigratedSafe(db);
     const doc = await db.collection(CLANS_COLLECTION).findOne({ _id: id });
     if (!doc) {
       res.status(404).json({ error: "Clan not found" });
@@ -241,8 +334,9 @@ app.get("/api/clans/:id", async (req, res) => {
 
 app.post("/api/clans", async (req, res) => {
   try {
+    if (!requireMongoUri(res)) return;
     const db = await getDb();
-    await ensureMigrated(db);
+    await ensureMigratedSafe(db);
     const sanitized = sanitizeClanBody(
       { ...req.body, bounties: [] },
       { emptyNameOk: false }
@@ -263,13 +357,14 @@ app.post("/api/clans", async (req, res) => {
 
 app.put("/api/clans/:id", async (req, res) => {
   try {
+    if (!requireMongoUri(res)) return;
     const id = String(req.params.id || "");
     if (!UUID_RE.test(id)) {
       res.status(400).json({ error: "Invalid clan id" });
       return;
     }
     const db = await getDb();
-    await ensureMigrated(db);
+    await ensureMigratedSafe(db);
     const existing = await db.collection(CLANS_COLLECTION).findOne({ _id: id });
     if (!existing) {
       res.status(404).json({ error: "Clan not found" });
@@ -295,9 +390,14 @@ app.put("/api/clans/:id", async (req, res) => {
 /** @deprecated Legacy single-clan routes; prefer /api/clans */
 app.get("/api/clan", async (_req, res) => {
   try {
+    if (!requireMongoUri(res)) return;
     const db = await getDb();
-    await ensureMigrated(db);
-    const docs = await db.collection(CLANS_COLLECTION).find({}).sort({ name: 1 }).limit(1).toArray();
+    await ensureMigratedSafe(db);
+    const docs = await db.collection(CLANS_COLLECTION).find({}).toArray();
+    docs.sort((a, b) =>
+      String(a.name ?? "").localeCompare(String(b.name ?? ""), undefined, { sensitivity: "base" })
+    );
+    docs.splice(1);
     if (!docs.length) {
       res.json({ clanName: "", players: [], bounties: [] });
       return;
@@ -312,10 +412,15 @@ app.get("/api/clan", async (_req, res) => {
 
 app.put("/api/clan", async (req, res) => {
   try {
+    if (!requireMongoUri(res)) return;
     const db = await getDb();
-    await ensureMigrated(db);
+    await ensureMigratedSafe(db);
     const col = db.collection(CLANS_COLLECTION);
-    const docs = await col.find({}).sort({ name: 1 }).limit(1).toArray();
+    const docs = await col.find({}).toArray();
+    docs.sort((a, b) =>
+      String(a.name ?? "").localeCompare(String(b.name ?? ""), undefined, { sensitivity: "base" })
+    );
+    docs.splice(1);
     const safe = sanitizeState(req.body || {});
     const payload = clanDocFromSanitized(safe);
     if (!docs.length) {
