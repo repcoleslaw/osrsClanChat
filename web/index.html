@@ -23,30 +23,35 @@
           <button type="button" class="app-nav__link" data-nav-page="calculators">Calculators</button>
         </nav>
       </div>
-      <a class="app-header__account" href="#">My Account</a>
+      <div class="app-header__right">
+        <button type="button" class="app-header__new-clan" id="btn-new-clan">New clan</button>
+        <a class="app-header__account" href="#">My Account</a>
+      </div>
     </header>
 
     <main class="main-container">
       <div id="page-dashboard" class="page page--active" aria-label="Clan Dashboard">
         <div class="dashboard-layout">
           <aside class="dashboard-col dashboard-col--members">
-            <h2 class="dashboard-col__heading">Clan Members</h2>
+            <h2 class="dashboard-col__heading">Clan</h2>
             <section class="card card--panel">
-              <h3 class="card__subtitle">Set Players in Clan</h3>
-              <p class="muted card__lede">Clan name and up to five OSRS usernames. Save, then sync hiscores from the clan column.</p>
-              <form id="clan-form">
-                <label>
-                  Clan name
-                  <input id="clan-name" type="text" maxlength="40" required placeholder="Example: Infernal Seekers" />
+              <h3 class="card__subtitle">Select clan</h3>
+              <p class="muted card__lede">
+                Choose a clan from the database. Roster and bounties are stored per clan. Hiscores sync for all members when you load a clan or use Refresh.
+              </p>
+              <div class="clan-picker">
+                <label class="clan-picker__label">
+                  Active clan
+                  <select id="clan-select" aria-label="Select clan"></select>
                 </label>
-
-                <div class="players-grid" id="players-grid"></div>
-
+                <div class="clan-members-block">
+                  <span class="clan-members-block__title">Members</span>
+                  <div id="clan-members-list" class="clan-members-list" aria-live="polite"></div>
+                </div>
                 <div class="actions">
-                  <button type="submit">Save Clan</button>
                   <button id="refresh-all" type="button">Refresh All Hiscores</button>
                 </div>
-              </form>
+              </div>
             </section>
           </aside>
 
@@ -94,6 +99,26 @@
         <input class="player-name" type="text" maxlength="12" placeholder="OSRS username" />
       </label>
     </template>
+
+    <dialog id="new-clan-modal" class="bounty-modal new-clan-modal" aria-labelledby="new-clan-modal-heading">
+      <div class="bounty-modal__inner">
+        <button type="button" class="bounty-modal__x" id="new-clan-modal-x" aria-label="Close">&times;</button>
+        <h3 id="new-clan-modal-heading" class="bounty-modal__heading">New clan</h3>
+        <p class="muted bounty-modal__as">Create a clan with a name and up to five OSRS usernames. You can sync hiscores after it is created.</p>
+        <label class="bounty-modal__label">
+          Clan name
+          <input type="text" id="new-clan-name" maxlength="40" placeholder="Example: Infernal Seekers" autocomplete="off" />
+        </label>
+        <div class="new-clan-players">
+          <span class="new-clan-players__label">Members (OSRS usernames)</span>
+          <div id="new-clan-players-grid" class="players-grid"></div>
+        </div>
+        <div class="bounty-form-actions bounty-modal__actions">
+          <button type="button" id="new-clan-submit">Create clan</button>
+          <button type="button" id="new-clan-cancel" class="btn-secondary">Cancel</button>
+        </div>
+      </div>
+    </dialog>
 
     <dialog id="bounty-modal" class="bounty-modal" aria-labelledby="bounty-modal-heading">
       <div class="bounty-modal__inner">

@@ -12,7 +12,8 @@ const BOUNTY_DESC_MAX = 2000;
 
 const MONGODB_URI = process.env.MONGODB_URI;
 const MONGODB_DB = process.env.MONGODB_DB || "osrsclanhub";
-const STATE_ID = "singleton";
+const LEGACY_STATE_ID = "singleton";
+const CLANS_COLLECTION = "clans";
 
 const defaultState = {
   clanName: "",
@@ -22,6 +23,9 @@ const defaultState = {
 
 /** @type {MongoClient | null} */
 let mongoClient = null;
+
+/** @type {Promise<void> | null} */
+let migrationPromise = null;
 
 async function getDb() {
   if (!MONGODB_URI) {
@@ -38,7 +42,7 @@ app.use(express.json({ limit: "512kb" }));
 
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, PUT, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, PUT, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") {
     res.sendStatus(204);
@@ -110,23 +114,24 @@ function sanitizeBounties(rawBounties, playerNames) {
 }
 
 function sanitizeState(input) {
-  const clanName = String(input?.clanName || "").trim().slice(0, 40);
+  const clanName = String(input?.clanName ?? input?.name ?? "").trim().slice(0, 40);
   const incomingPlayers = Array.isArray(input?.players) ? input.players : [];
   const unique = [];
   const seen = new Set();
 
   for (const player of incomingPlayers) {
-    const normalizedName = cleanName(player?.name);
+    const normalizedName = cleanName(typeof player === "string" ? player : player?.name);
     const key = normalizedName.toLowerCase();
     if (!normalizedName || seen.has(key)) continue;
     seen.add(key);
 
+    const p = typeof player === "object" && player ? player : {};
     unique.push({
       name: normalizedName,
-      message: String(player?.message || "").trim().slice(0, 240),
-      updatedAt: player?.updatedAt ? String(player.updatedAt) : null,
-      totalLevel: Number(player?.totalLevel) || 0,
-      skills: typeof player?.skills === "object" && player?.skills ? player.skills : {}
+      message: String(p?.message || "").trim().slice(0, 240),
+      updatedAt: p?.updatedAt ? String(p.updatedAt) : null,
+      totalLevel: Number(p?.totalLevel) || 0,
+      skills: typeof p?.skills === "object" && p?.skills ? p.skills : {}
     });
 
     if (unique.length >= MAX_PLAYERS) break;
@@ -137,27 +142,168 @@ function sanitizeState(input) {
   return { clanName, players: unique, bounties };
 }
 
-async function readState() {
-  const db = await getDb();
-  const doc = await db.collection("clanState").findOne({ _id: STATE_ID });
-  if (!doc) {
-    return sanitizeState({ ...defaultState });
+function clanDocFromSanitized(safe) {
+  return {
+    name: safe.clanName,
+    players: safe.players,
+    bounties: safe.bounties
+  };
+}
+
+function sanitizeClanBody(body, options = {}) {
+  const { emptyNameOk = false } = options;
+  const safe = sanitizeState({
+    clanName: body?.name ?? body?.clanName ?? "",
+    players: body?.players,
+    bounties: body?.bounties
+  });
+  if (!emptyNameOk && !safe.clanName.trim()) {
+    return null;
   }
-  const { _id: _drop, ...rest } = doc;
-  return sanitizeState(rest);
+  return clanDocFromSanitized(safe);
 }
 
-async function writeState(input) {
-  const safe = sanitizeState(input || {});
-  const db = await getDb();
-  await db.collection("clanState").updateOne({ _id: STATE_ID }, { $set: safe }, { upsert: true });
-  return safe;
+async function migrateLegacySingletonIfNeeded(db) {
+  const clans = db.collection(CLANS_COLLECTION);
+  const n = await clans.countDocuments();
+  if (n > 0) return;
+
+  const legacy = await db.collection("clanState").findOne({ _id: LEGACY_STATE_ID });
+  if (!legacy) return;
+
+  const { _id: _drop, ...rest } = legacy;
+  const safe = sanitizeState(rest);
+  if (!safe.clanName && safe.players.length === 0 && safe.bounties.length === 0) return;
+
+  const doc = { _id: randomUUID(), ...clanDocFromSanitized(safe) };
+  await clans.insertOne(doc);
 }
 
+async function ensureMigrated(db) {
+  if (!migrationPromise) {
+    migrationPromise = migrateLegacySingletonIfNeeded(db).catch((err) => {
+      migrationPromise = null;
+      throw err;
+    });
+  }
+  await migrationPromise;
+}
+
+function clanToListItem(doc) {
+  return {
+    id: doc._id,
+    name: doc.name || "",
+    playerCount: Array.isArray(doc.players) ? doc.players.length : 0
+  };
+}
+
+function clanToApi(doc) {
+  return {
+    id: doc._id,
+    name: doc.name || "",
+    players: Array.isArray(doc.players) ? doc.players : [],
+    bounties: Array.isArray(doc.bounties) ? doc.bounties : []
+  };
+}
+
+app.get("/api/clans", async (_req, res) => {
+  try {
+    const db = await getDb();
+    await ensureMigrated(db);
+    const docs = await db.collection(CLANS_COLLECTION).find({}).sort({ name: 1 }).toArray();
+    res.json({ clans: docs.map(clanToListItem) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Could not load clans" });
+  }
+});
+
+app.get("/api/clans/:id", async (req, res) => {
+  try {
+    const id = String(req.params.id || "");
+    if (!UUID_RE.test(id)) {
+      res.status(400).json({ error: "Invalid clan id" });
+      return;
+    }
+    const db = await getDb();
+    await ensureMigrated(db);
+    const doc = await db.collection(CLANS_COLLECTION).findOne({ _id: id });
+    if (!doc) {
+      res.status(404).json({ error: "Clan not found" });
+      return;
+    }
+    res.json(clanToApi(doc));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Could not load clan" });
+  }
+});
+
+app.post("/api/clans", async (req, res) => {
+  try {
+    const db = await getDb();
+    await ensureMigrated(db);
+    const sanitized = sanitizeClanBody(
+      { ...req.body, bounties: [] },
+      { emptyNameOk: false }
+    );
+    if (!sanitized || !sanitized.name.trim()) {
+      res.status(400).json({ error: "Clan name is required" });
+      return;
+    }
+    const id = randomUUID();
+    const doc = { _id: id, ...sanitized };
+    await db.collection(CLANS_COLLECTION).insertOne(doc);
+    res.status(201).json(clanToApi(doc));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Could not create clan" });
+  }
+});
+
+app.put("/api/clans/:id", async (req, res) => {
+  try {
+    const id = String(req.params.id || "");
+    if (!UUID_RE.test(id)) {
+      res.status(400).json({ error: "Invalid clan id" });
+      return;
+    }
+    const db = await getDb();
+    await ensureMigrated(db);
+    const existing = await db.collection(CLANS_COLLECTION).findOne({ _id: id });
+    if (!existing) {
+      res.status(404).json({ error: "Clan not found" });
+      return;
+    }
+    const sanitized = sanitizeClanBody(req.body, { emptyNameOk: true });
+    if (!sanitized) {
+      res.status(400).json({ error: "Invalid clan data" });
+      return;
+    }
+    if (!sanitized.name.trim()) {
+      sanitized.name = existing.name || "";
+    }
+    const doc = { _id: id, ...sanitized };
+    await db.collection(CLANS_COLLECTION).replaceOne({ _id: id }, doc);
+    res.json(clanToApi(doc));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Could not save clan" });
+  }
+});
+
+/** @deprecated Legacy single-clan routes; prefer /api/clans */
 app.get("/api/clan", async (_req, res) => {
   try {
-    const state = await readState();
-    res.json(state);
+    const db = await getDb();
+    await ensureMigrated(db);
+    const docs = await db.collection(CLANS_COLLECTION).find({}).sort({ name: 1 }).limit(1).toArray();
+    if (!docs.length) {
+      res.json({ clanName: "", players: [], bounties: [] });
+      return;
+    }
+    const c = clanToApi(docs[0]);
+    res.json({ clanName: c.name, players: c.players, bounties: c.bounties });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Could not load clan data" });
@@ -166,8 +312,21 @@ app.get("/api/clan", async (_req, res) => {
 
 app.put("/api/clan", async (req, res) => {
   try {
-    const saved = await writeState(req.body || {});
-    res.json(saved);
+    const db = await getDb();
+    await ensureMigrated(db);
+    const col = db.collection(CLANS_COLLECTION);
+    const docs = await col.find({}).sort({ name: 1 }).limit(1).toArray();
+    const safe = sanitizeState(req.body || {});
+    const payload = clanDocFromSanitized(safe);
+    if (!docs.length) {
+      const id = randomUUID();
+      await col.insertOne({ _id: id, ...payload });
+      res.json({ clanName: payload.name, players: payload.players, bounties: payload.bounties });
+      return;
+    }
+    const id = docs[0]._id;
+    await col.replaceOne({ _id: id }, { _id: id, ...payload });
+    res.json({ clanName: payload.name, players: payload.players, bounties: payload.bounties });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Could not save clan data" });

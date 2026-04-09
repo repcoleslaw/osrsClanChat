@@ -9,13 +9,100 @@ function apiUrl(path) {
   return `${API_BASE}${path}`;
 }
 
-const defaultData = {
-  clanName: "",
+const emptyClanState = () => ({
+  id: null,
+  name: "",
   players: [],
   bounties: []
-};
+});
 
 const ACTING_AS_KEY = "osrs-clan-hub-acting-as";
+const LOCAL_CLAN_STATE_KEY = "osrs-clan-hub-clan-backup";
+const SELECTED_CLAN_ID_KEY = "osrs-clan-hub-selected-clan-id";
+
+function normalizePlayerName(name) {
+  return String(name || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(0, 12);
+}
+
+function actingStorageKey() {
+  const id = selectedClanId || state.id;
+  return id ? `${ACTING_AS_KEY}:${id}` : ACTING_AS_KEY;
+}
+
+function readLocalClanState() {
+  try {
+    const raw = localStorage.getItem(LOCAL_CLAN_STATE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+
+    const clanId = typeof parsed.clanId === "string" ? parsed.clanId : null;
+    const nameRaw = parsed.name ?? parsed.clanName;
+    const name = typeof nameRaw === "string" ? nameRaw.trim().slice(0, 40) : "";
+
+    const players = [];
+    if (Array.isArray(parsed.players)) {
+      const seen = new Set();
+      for (const p of parsed.players) {
+        if (players.length >= MAX_PLAYERS) break;
+        if (!p || typeof p.name !== "string") continue;
+        const n = normalizePlayerName(p.name);
+        if (!n) continue;
+        const key = n.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        players.push({
+          name: n,
+          message: typeof p.message === "string" ? p.message.trim().slice(0, 240) : "",
+          updatedAt: p.updatedAt != null ? String(p.updatedAt) : null,
+          totalLevel: Number(p.totalLevel) || 0,
+          skills: typeof p.skills === "object" && p.skills ? p.skills : {}
+        });
+      }
+    }
+
+    const bounties = [];
+    if (Array.isArray(parsed.bounties)) {
+      for (const b of parsed.bounties) {
+        if (!b || typeof b !== "object") continue;
+        let st = typeof b.state === "string" ? b.state.toLowerCase().replace(/\s+/g, "_") : "open";
+        if (st === "inprogress") st = "in_progress";
+        if (!["open", "in_progress", "closed"].includes(st)) st = "open";
+        bounties.push({
+          id: typeof b.id === "string" && b.id ? b.id : crypto.randomUUID(),
+          title: typeof b.title === "string" ? b.title : "",
+          description: typeof b.description === "string" ? b.description : "",
+          requester: typeof b.requester === "string" ? normalizePlayerName(b.requester) : "",
+          owner: b.owner && typeof b.owner === "string" ? normalizePlayerName(b.owner) : null,
+          state: st,
+          createdAt: b.createdAt != null ? String(b.createdAt) : new Date().toISOString(),
+          updatedAt: b.updatedAt != null ? String(b.updatedAt) : new Date().toISOString()
+        });
+      }
+    }
+
+    return { clanId, name, players, bounties };
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalClanState(s) {
+  try {
+    const payload = {
+      clanId: s.id,
+      name: s.name || "",
+      players: Array.isArray(s.players) ? s.players.slice(0, MAX_PLAYERS) : [],
+      bounties: Array.isArray(s.bounties) ? s.bounties : []
+    };
+    localStorage.setItem(LOCAL_CLAN_STATE_KEY, JSON.stringify(payload));
+  } catch {
+    /* ignore */
+  }
+}
 
 const skillsOrder = [
   "overall",
@@ -47,9 +134,8 @@ const skillsOrder = [
 /** Skills shown on each player card (excludes "overall" — total is shown in the card header). */
 const SKILL_KEYS = skillsOrder.filter((k) => k !== "overall");
 
-const clanForm = document.getElementById("clan-form");
-const clanNameInput = document.getElementById("clan-name");
-const playersGrid = document.getElementById("players-grid");
+const clanSelect = document.getElementById("clan-select");
+const clanMembersList = document.getElementById("clan-members-list");
 const playerInputTemplate = document.getElementById("player-input-template");
 const clanTitle = document.getElementById("clan-title");
 const refreshAllBtn = document.getElementById("refresh-all");
@@ -71,54 +157,191 @@ const bountyModalSubmit = document.getElementById("bounty-modal-submit");
 const bountyModalCancel = document.getElementById("bounty-modal-cancel");
 const bountyModalX = document.getElementById("bounty-modal-x");
 
-let state = { ...defaultData };
+const btnNewClan = document.getElementById("btn-new-clan");
+const newClanModal = document.getElementById("new-clan-modal");
+const newClanNameInput = document.getElementById("new-clan-name");
+const newClanPlayersGrid = document.getElementById("new-clan-players-grid");
+const newClanSubmit = document.getElementById("new-clan-submit");
+const newClanCancel = document.getElementById("new-clan-cancel");
+const newClanModalX = document.getElementById("new-clan-modal-x");
 
-async function loadState() {
+/** @type {{ id: string, name: string, playerCount: number }[]} */
+let clanList = [];
+let selectedClanId = null;
+let state = emptyClanState();
+
+async function fetchClanList() {
   try {
-    const response = await fetch(apiUrl("/api/clan"));
-    if (!response.ok) throw new Error("Failed to load");
-    const parsed = await response.json();
-    state = {
-      clanName: parsed.clanName || "",
-      players: Array.isArray(parsed.players) ? parsed.players.slice(0, MAX_PLAYERS) : [],
-      bounties: Array.isArray(parsed.bounties) ? parsed.bounties : []
-    };
+    const response = await fetch(apiUrl("/api/clans"));
+    if (!response.ok) throw new Error("Failed to list clans");
+    const data = await response.json();
+    clanList = Array.isArray(data.clans) ? data.clans : [];
   } catch {
-    state = { ...defaultData };
+    clanList = [];
+  }
+}
+
+function persistSelectedClanId(id) {
+  selectedClanId = id;
+  try {
+    if (id) localStorage.setItem(SELECTED_CLAN_ID_KEY, id);
+    else localStorage.removeItem(SELECTED_CLAN_ID_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+async function loadClanDetail(id) {
+  try {
+    const response = await fetch(apiUrl(`/api/clans/${encodeURIComponent(id)}`));
+    if (!response.ok) throw new Error("Failed to load clan");
+    const data = await response.json();
+    state = {
+      id: data.id,
+      name: data.name || "",
+      players: Array.isArray(data.players) ? data.players.slice(0, MAX_PLAYERS) : [],
+      bounties: Array.isArray(data.bounties) ? data.bounties : []
+    };
+    writeLocalClanState(state);
+  } catch {
+    const local = readLocalClanState();
+    if (local && local.clanId === id) {
+      state = {
+        id: local.clanId,
+        name: local.name,
+        players: local.players,
+        bounties: local.bounties
+      };
+    } else {
+      state = { id, name: "", players: [], bounties: [] };
+    }
+  }
+}
+
+async function selectClanById(id, options = {}) {
+  const { refreshHiscores = false } = options;
+  if (!id) return;
+  persistSelectedClanId(id);
+  await loadClanDetail(id);
+  render();
+  if (refreshHiscores && state.players.length) {
+    await refreshAllPlayers();
+    render();
   }
 }
 
 async function saveState() {
-  const response = await fetch(apiUrl("/api/clan"), {
+  if (!state.id) {
+    throw new Error("No clan selected");
+  }
+  const response = await fetch(apiUrl(`/api/clans/${encodeURIComponent(state.id)}`), {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(state)
+    body: JSON.stringify({
+      name: state.name,
+      players: state.players,
+      bounties: state.bounties
+    })
   });
   if (!response.ok) {
     throw new Error("Failed to save clan data");
   }
   const saved = await response.json();
   state = {
-    clanName: saved.clanName || "",
+    id: saved.id,
+    name: saved.name || "",
     players: Array.isArray(saved.players) ? saved.players.slice(0, MAX_PLAYERS) : [],
     bounties: Array.isArray(saved.bounties) ? saved.bounties : []
   };
+  writeLocalClanState(state);
+  const idx = clanList.findIndex((c) => c.id === state.id);
+  if (idx >= 0) {
+    clanList[idx] = { id: state.id, name: state.name, playerCount: state.players.length };
+  }
 }
 
-function normalizePlayerName(name) {
-  return name.trim().replace(/\s+/g, " ").slice(0, 12);
-}
-
-function initPlayerInputs() {
-  playersGrid.innerHTML = "";
+function initNewClanPlayerGrid() {
+  if (!newClanPlayersGrid || !playerInputTemplate) return;
+  newClanPlayersGrid.innerHTML = "";
   for (let i = 0; i < MAX_PLAYERS; i += 1) {
     const clone = playerInputTemplate.content.cloneNode(true);
     clone.querySelector(".index").textContent = String(i + 1);
     const input = clone.querySelector(".player-name");
     input.dataset.index = String(i);
-    input.value = state.players[i]?.name || "";
-    playersGrid.appendChild(clone);
+    input.value = "";
+    newClanPlayersGrid.appendChild(clone);
   }
+}
+
+function closeNewClanModal() {
+  if (newClanModal && typeof newClanModal.close === "function" && newClanModal.open) {
+    newClanModal.close();
+  }
+}
+
+function openNewClanModal() {
+  if (!newClanModal) return;
+  if (newClanNameInput) newClanNameInput.value = "";
+  initNewClanPlayerGrid();
+  if (typeof newClanModal.showModal === "function") {
+    newClanModal.showModal();
+    newClanNameInput?.focus();
+  }
+}
+
+function initNewClanModal() {
+  if (!newClanModal) return;
+
+  newClanModal.addEventListener("click", (e) => {
+    if (e.target === newClanModal) closeNewClanModal();
+  });
+  newClanCancel?.addEventListener("click", () => closeNewClanModal());
+  newClanModalX?.addEventListener("click", () => closeNewClanModal());
+
+  btnNewClan?.addEventListener("click", () => openNewClanModal());
+
+  newClanSubmit?.addEventListener("click", async () => {
+    const clanName = (newClanNameInput?.value || "").trim().slice(0, 40);
+    if (!clanName) return;
+    const names = [...(newClanPlayersGrid?.querySelectorAll(".player-name") || [])]
+      .map((input) => normalizePlayerName(input.value))
+      .filter(Boolean);
+    const uniqueNames = [...new Set(names)].slice(0, MAX_PLAYERS);
+    const players = uniqueNames.map((name) => ({
+      name,
+      message: "",
+      updatedAt: null,
+      totalLevel: 0,
+      skills: {}
+    }));
+
+    try {
+      const response = await fetch(apiUrl("/api/clans"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: clanName, players })
+      });
+      if (!response.ok) throw new Error("Create failed");
+      const created = await response.json();
+      closeNewClanModal();
+      await fetchClanList();
+      persistSelectedClanId(created.id);
+      state = {
+        id: created.id,
+        name: created.name || "",
+        players: Array.isArray(created.players) ? created.players.slice(0, MAX_PLAYERS) : [],
+        bounties: Array.isArray(created.bounties) ? created.bounties : []
+      };
+      writeLocalClanState(state);
+      render();
+      if (state.players.length) {
+        await refreshAllPlayers();
+        render();
+      }
+    } catch {
+      /* keep modal open */
+    }
+  });
 }
 
 function formatSkillName(key) {
@@ -169,16 +392,6 @@ async function fetchHiscores(playerName) {
   return parseHiscoresCsv(csv);
 }
 
-function upsertPlayer(existingPlayer, name) {
-  return {
-    name,
-    message: existingPlayer?.message || "",
-    updatedAt: existingPlayer?.updatedAt || null,
-    totalLevel: existingPlayer?.totalLevel || 0,
-    skills: existingPlayer?.skills || {}
-  };
-}
-
 async function refreshPlayer(index) {
   const player = state.players[index];
   if (!player) return;
@@ -200,13 +413,13 @@ async function refreshPlayer(index) {
     await saveState();
   } catch {
     player.fetchStatus = "error";
+    writeLocalClanState(state);
   }
   render();
 }
 
 async function refreshAllPlayers() {
   for (let i = 0; i < state.players.length; i += 1) {
-    // Sequential calls reduce chance of API rate-limits.
     // eslint-disable-next-line no-await-in-loop
     await refreshPlayer(i);
   }
@@ -214,7 +427,7 @@ async function refreshAllPlayers() {
 
 function renderClanTitle() {
   if (!clanTitle) return;
-  clanTitle.textContent = state.clanName ? state.clanName : "Clan";
+  clanTitle.textContent = state.name ? state.name : "Clan";
 }
 
 function ensureBounties() {
@@ -223,7 +436,7 @@ function ensureBounties() {
 
 function getActingAs() {
   try {
-    return localStorage.getItem(ACTING_AS_KEY) || "";
+    return localStorage.getItem(actingStorageKey()) || "";
   } catch {
     return "";
   }
@@ -231,8 +444,8 @@ function getActingAs() {
 
 function setActingAs(name) {
   try {
-    if (name) localStorage.setItem(ACTING_AS_KEY, name);
-    else localStorage.removeItem(ACTING_AS_KEY);
+    if (name) localStorage.setItem(actingStorageKey(), name);
+    else localStorage.removeItem(actingStorageKey());
   } catch {
     /* ignore */
   }
@@ -264,11 +477,7 @@ async function persistBounties() {
   try {
     await saveState();
   } catch {
-    try {
-      await loadState();
-    } catch {
-      /* ignore */
-    }
+    writeLocalClanState(state);
     render();
   }
 }
@@ -325,15 +534,68 @@ function initBountyModal() {
   });
 }
 
+function renderClanSelect() {
+  if (!clanSelect) return;
+  const cur = selectedClanId || state.id || "";
+  clanSelect.innerHTML = "";
+  const ph = document.createElement("option");
+  ph.value = "";
+  ph.textContent = clanList.length ? "Select a clan…" : "No clans yet — use New clan";
+  clanSelect.appendChild(ph);
+  clanList.forEach((c) => {
+    const o = document.createElement("option");
+    o.value = c.id;
+    o.textContent = c.name?.trim() ? c.name : "(Unnamed)";
+    clanSelect.appendChild(o);
+  });
+  const valid = cur && clanList.some((c) => c.id === cur);
+  clanSelect.value = valid ? cur : "";
+}
+
+function renderClanMembersList() {
+  if (!clanMembersList) return;
+  clanMembersList.innerHTML = "";
+  if (!state.id) {
+    const p = document.createElement("p");
+    p.className = "muted";
+    p.textContent = "Select a clan to see its roster.";
+    clanMembersList.appendChild(p);
+    return;
+  }
+  if (!state.players.length) {
+    const p = document.createElement("p");
+    p.className = "muted";
+    p.textContent = "This clan has no members yet. Edit the roster in a future update, or recreate the clan with New clan.";
+    clanMembersList.appendChild(p);
+    return;
+  }
+  const ul = document.createElement("ul");
+  ul.className = "clan-members-list__items";
+  state.players.forEach((pl) => {
+    const li = document.createElement("li");
+    li.textContent = pl.name;
+    ul.appendChild(li);
+  });
+  clanMembersList.appendChild(ul);
+}
+
 function renderBountyBoard() {
   if (!bountyMount) return;
   bountyMount.innerHTML = "";
   ensureBounties();
 
+  if (!state.id) {
+    const p = document.createElement("p");
+    p.className = "muted";
+    p.textContent = "Select a clan to use the bounty board.";
+    bountyMount.appendChild(p);
+    return;
+  }
+
   if (!state.players.length) {
     const p = document.createElement("p");
     p.className = "muted";
-    p.textContent = "Save at least one clan member to use the bounty board.";
+    p.textContent = "This clan needs at least one member for the bounty board.";
     bountyMount.appendChild(p);
     return;
   }
@@ -514,8 +776,9 @@ function renderSkillCards() {
   if (!skillCards) return;
   skillCards.innerHTML = "";
 
-  if (!state.players.length) {
-    skillCards.innerHTML = '<p class="muted">Save a clan with at least one player to see player cards here.</p>';
+  if (!state.id || !state.players.length) {
+    skillCards.innerHTML =
+      '<p class="muted">Select a clan with at least one member to see player cards here.</p>';
     return;
   }
 
@@ -539,7 +802,9 @@ function renderSkillCards() {
     statusInput.addEventListener("change", () => {
       if (index < 0) return;
       state.players[index].message = statusInput.value.trim().slice(0, 240);
-      saveState().catch(() => {});
+      saveState().catch(() => {
+        writeLocalClanState(state);
+      });
     });
     statusStrip.append(statusLabel, statusInput);
 
@@ -628,10 +893,10 @@ function renderClanHighscoreTable() {
   if (!clanHighscoresRoot) return;
   clanHighscoresRoot.innerHTML = "";
 
-  if (!state.players.length) {
+  if (!state.id || !state.players.length) {
     const p = document.createElement("p");
     p.className = "muted";
-    p.textContent = "Save a clan with members to see the highscore table.";
+    p.textContent = "Select a clan with members to see the highscore table.";
     clanHighscoresRoot.appendChild(p);
     return;
   }
@@ -715,7 +980,8 @@ function initClanTabs() {
 }
 
 function render() {
-  clanNameInput.value = state.clanName;
+  renderClanSelect();
+  renderClanMembersList();
   renderClanTitle();
   renderSkillCards();
   renderClanHighscoreTable();
@@ -740,36 +1006,16 @@ function setActivePage(pageId) {
   });
 }
 
-clanForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const clanName = clanNameInput.value.trim().slice(0, 40);
-  const names = [...playersGrid.querySelectorAll(".player-name")]
-    .map((input) => normalizePlayerName(input.value))
-    .filter(Boolean);
-
-  const uniqueNames = [...new Set(names)].slice(0, MAX_PLAYERS);
-
-  const nextPlayers = uniqueNames.map((name) => {
-    const existing = state.players.find((p) => p.name.toLowerCase() === name.toLowerCase());
-    return upsertPlayer(existing, name);
+function initClanSelect() {
+  clanSelect?.addEventListener("change", async () => {
+    const id = clanSelect.value;
+    if (!id) return;
+    if (id === selectedClanId && state.id === id) return;
+    await selectClanById(id, { refreshHiscores: true });
   });
+}
 
-  ensureBounties();
-  state = {
-    clanName,
-    players: nextPlayers,
-    bounties: state.bounties
-  };
-
-  try {
-    await saveState();
-  } catch {
-    // Keep local UI state even if backend save fails.
-  }
-  render();
-});
-
-refreshAllBtn.addEventListener("click", () => {
+refreshAllBtn?.addEventListener("click", () => {
   refreshAllPlayers();
 });
 
@@ -781,11 +1027,32 @@ navLinks.forEach((link) => {
 });
 
 async function boot() {
-  await loadState();
-  initPlayerInputs();
+  await fetchClanList();
+
+  let storedId = null;
+  try {
+    storedId = localStorage.getItem(SELECTED_CLAN_ID_KEY);
+  } catch {
+    storedId = null;
+  }
+
+  const pick =
+    storedId && clanList.some((c) => c.id === storedId)
+      ? storedId
+      : clanList[0]?.id || null;
+
+  if (pick) {
+    await selectClanById(pick, { refreshHiscores: true });
+  } else {
+    persistSelectedClanId(null);
+    state = emptyClanState();
+    render();
+  }
+
+  initNewClanModal();
   initBountyModal();
   initClanTabs();
-  render();
+  initClanSelect();
 }
 
 boot();
