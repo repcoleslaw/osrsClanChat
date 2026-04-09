@@ -40,10 +40,36 @@ async function getDb() {
     throw new Error("MONGODB_URI is not set");
   }
   if (!mongoClient) {
-    mongoClient = new MongoClient(MONGODB_URI, MONGO_OPTIONS);
-    await mongoClient.connect();
+    const client = new MongoClient(MONGODB_URI, MONGO_OPTIONS);
+    await client.connect();
+    mongoClient = client;
+    return mongoClient.db(MONGODB_DB);
   }
-  return mongoClient.db(MONGODB_DB);
+
+  try {
+    // Fast liveness check so stale/closed clients are rotated automatically.
+    await mongoClient.db("admin").command({ ping: 1 });
+    return mongoClient.db(MONGODB_DB);
+  } catch (err) {
+    const message = String(err?.message || "");
+    const isClosed =
+      message.toLowerCase().includes("topology is closed") ||
+      message.toLowerCase().includes("client must be connected");
+    if (!isClosed) {
+      throw err;
+    }
+
+    try {
+      await mongoClient.close();
+    } catch {
+      /* ignore close errors on stale clients */
+    }
+
+    const client = new MongoClient(MONGODB_URI, MONGO_OPTIONS);
+    await client.connect();
+    mongoClient = client;
+    return mongoClient.db(MONGODB_DB);
+  }
 }
 
 app.use(express.json({ limit: "512kb" }));
