@@ -159,11 +159,13 @@ const bountyModalX = document.getElementById("bounty-modal-x");
 
 const btnNewClan = document.getElementById("btn-new-clan");
 const newClanModal = document.getElementById("new-clan-modal");
+const newClanForm = document.getElementById("new-clan-form");
 const newClanNameInput = document.getElementById("new-clan-name");
 const newClanPlayersGrid = document.getElementById("new-clan-players-grid");
 const newClanSubmit = document.getElementById("new-clan-submit");
 const newClanCancel = document.getElementById("new-clan-cancel");
 const newClanModalX = document.getElementById("new-clan-modal-x");
+const newClanError = document.getElementById("new-clan-error");
 
 /** @type {{ id: string, name: string, playerCount: number }[]} */
 let clanList = [];
@@ -177,8 +179,40 @@ async function fetchClanList() {
     const data = await response.json();
     clanList = Array.isArray(data.clans) ? data.clans : [];
   } catch {
-    clanList = [];
+    /* Keep existing clanList so a successful create still shows in the dropdown. */
   }
+}
+
+/** Ensures the dropdown includes this clan even before / after a list refetch. */
+function upsertClanListFromDetail(clan) {
+  const id = clan?.id;
+  if (!id) return;
+  const name = clan.name || "";
+  const playerCount = Array.isArray(clan.players)
+    ? clan.players.length
+    : Number(clan.playerCount) || 0;
+  const idx = clanList.findIndex((c) => c.id === id);
+  const row = { id, name, playerCount };
+  if (idx >= 0) {
+    clanList[idx] = row;
+  } else {
+    clanList.push(row);
+    clanList.sort((a, b) =>
+      String(a.name || "").localeCompare(String(b.name || ""), undefined, { sensitivity: "base" })
+    );
+  }
+}
+
+function clearNewClanError() {
+  if (!newClanError) return;
+  newClanError.textContent = "";
+  newClanError.hidden = true;
+}
+
+function showNewClanError(message) {
+  if (!newClanError) return;
+  newClanError.textContent = message;
+  newClanError.hidden = false;
 }
 
 function persistSelectedClanId(id) {
@@ -281,6 +315,7 @@ function closeNewClanModal() {
 
 function openNewClanModal() {
   if (!newClanModal) return;
+  clearNewClanError();
   if (newClanNameInput) newClanNameInput.value = "";
   initNewClanPlayerGrid();
   if (typeof newClanModal.showModal === "function") {
@@ -300,9 +335,14 @@ function initNewClanModal() {
 
   btnNewClan?.addEventListener("click", () => openNewClanModal());
 
-  newClanSubmit?.addEventListener("click", async () => {
+  newClanForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    clearNewClanError();
     const clanName = (newClanNameInput?.value || "").trim().slice(0, 40);
-    if (!clanName) return;
+    if (!clanName) {
+      showNewClanError("Enter a clan name.");
+      return;
+    }
     const names = [...(newClanPlayersGrid?.querySelectorAll(".player-name") || [])]
       .map((input) => normalizePlayerName(input.value))
       .filter(Boolean);
@@ -315,16 +355,42 @@ function initNewClanModal() {
       skills: {}
     }));
 
+    const submitBtn = newClanSubmit;
+    if (submitBtn) submitBtn.disabled = true;
     try {
       const response = await fetch(apiUrl("/api/clans"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: clanName, players })
       });
-      if (!response.ok) throw new Error("Create failed");
-      const created = await response.json();
-      closeNewClanModal();
+      const bodyText = await response.text();
+      let parsed = null;
+      try {
+        parsed = bodyText ? JSON.parse(bodyText) : null;
+      } catch {
+        parsed = null;
+      }
+      if (!response.ok) {
+        const msg =
+          parsed && typeof parsed.error === "string"
+            ? parsed.error
+            : `Could not create clan (${response.status}). Check the API and database.`;
+        showNewClanError(msg);
+        return;
+      }
+      const created = parsed && typeof parsed === "object" ? parsed : null;
+      if (!created?.id) {
+        showNewClanError("Server returned an unexpected response.");
+        return;
+      }
+
+      upsertClanListFromDetail(created);
       await fetchClanList();
+      if (!clanList.some((c) => c.id === created.id)) {
+        upsertClanListFromDetail(created);
+      }
+
+      closeNewClanModal();
       persistSelectedClanId(created.id);
       state = {
         id: created.id,
@@ -339,7 +405,9 @@ function initNewClanModal() {
         render();
       }
     } catch {
-      /* keep modal open */
+      showNewClanError("Network error — could not reach the server. Is it running and is the API URL correct?");
+    } finally {
+      if (submitBtn) submitBtn.disabled = false;
     }
   });
 }

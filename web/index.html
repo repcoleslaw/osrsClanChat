@@ -105,18 +105,21 @@
         <button type="button" class="bounty-modal__x" id="new-clan-modal-x" aria-label="Close">&times;</button>
         <h3 id="new-clan-modal-heading" class="bounty-modal__heading">New clan</h3>
         <p class="muted bounty-modal__as">Create a clan with a name and up to five OSRS usernames. You can sync hiscores after it is created.</p>
-        <label class="bounty-modal__label">
-          Clan name
-          <input type="text" id="new-clan-name" maxlength="40" placeholder="Example: Infernal Seekers" autocomplete="off" />
-        </label>
-        <div class="new-clan-players">
-          <span class="new-clan-players__label">Members (OSRS usernames)</span>
-          <div id="new-clan-players-grid" class="players-grid"></div>
-        </div>
-        <div class="bounty-form-actions bounty-modal__actions">
-          <button type="button" id="new-clan-submit">Create clan</button>
-          <button type="button" id="new-clan-cancel" class="btn-secondary">Cancel</button>
-        </div>
+        <p id="new-clan-error" class="new-clan-error" role="alert" hidden></p>
+        <form id="new-clan-form" class="new-clan-form">
+          <label class="bounty-modal__label">
+            Clan name
+            <input type="text" id="new-clan-name" name="clanName" maxlength="40" required placeholder="Example: Infernal Seekers" autocomplete="off" />
+          </label>
+          <div class="new-clan-players">
+            <span class="new-clan-players__label">Members (OSRS usernames)</span>
+            <div id="new-clan-players-grid" class="players-grid"></div>
+          </div>
+          <div class="bounty-form-actions bounty-modal__actions">
+            <button type="submit" id="new-clan-submit">Create clan</button>
+            <button type="button" id="new-clan-cancel" class="btn-secondary">Cancel</button>
+          </div>
+        </form>
       </div>
     </dialog>
 

@@ -236,6 +236,26 @@ p {
   margin-bottom: 8px;
 }
 
+.new-clan-error {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 4px;
+  background: rgba(120, 40, 40, 0.35);
+  border: 1px solid rgba(200, 80, 80, 0.5);
+  color: #f0c8c8;
+  font-size: 14px;
+}
+
+.new-clan-error[hidden] {
+  display: none !important;
+}
+
+.new-clan-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
 .main-container {
   flex: 1;
   width: 100%;
