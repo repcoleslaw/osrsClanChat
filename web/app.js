@@ -59,7 +59,8 @@ function readLocalClanState() {
           message: typeof p.message === "string" ? p.message.trim().slice(0, 240) : "",
           updatedAt: p.updatedAt != null ? String(p.updatedAt) : null,
           totalLevel: Number(p.totalLevel) || 0,
-          skills: typeof p.skills === "object" && p.skills ? p.skills : {}
+          skills: typeof p.skills === "object" && p.skills ? p.skills : {},
+          skillsXp: typeof p.skillsXp === "object" && p.skillsXp ? p.skillsXp : {}
         });
       }
     }
@@ -134,6 +135,7 @@ const skillsOrder = [
 
 /** Skills shown on each player card (excludes "overall" — total is shown in the card header). */
 const SKILL_KEYS = skillsOrder.filter((k) => k !== "overall");
+const SKILL_XP_CAP = 13034431;
 
 const clanSelect = document.getElementById("clan-select");
 const clanMembersList = document.getElementById("clan-members-list");
@@ -353,7 +355,8 @@ function initNewClanModal() {
       message: "",
       updatedAt: null,
       totalLevel: 0,
-      skills: {}
+      skills: {},
+      skillsXp: {}
     }));
 
     const submitBtn = newClanSubmit;
@@ -436,17 +439,20 @@ function playerStatusLine(player) {
 function parseHiscoresCsv(text) {
   const lines = text.trim().split(/\r?\n/);
   const skills = {};
+  const skillsXp = {};
 
   for (let i = 0; i < skillsOrder.length; i += 1) {
     const line = lines[i];
     if (!line) continue;
-    const [, level] = line.split(",");
+    const [, level, xp] = line.split(",");
     skills[skillsOrder[i]] = Number(level) || 0;
+    skillsXp[skillsOrder[i]] = Math.max(0, Number(xp) || 0);
   }
 
   return {
     totalLevel: skills.overall || 0,
-    skills
+    skills,
+    skillsXp
   };
 }
 
@@ -472,6 +478,7 @@ async function refreshPlayer(index) {
     const data = await fetchHiscores(player.name);
     player.totalLevel = data.totalLevel;
     player.skills = data.skills;
+    player.skillsXp = data.skillsXp;
     player.updatedAt = new Date().toISOString();
     player.fetchStatus = "ok";
   } catch {
@@ -927,6 +934,7 @@ function renderSkillCards() {
     } else {
       SKILL_KEYS.forEach((key) => {
         const level = Number(player.skills[key]) || 0;
+        const skillXp = Number(player.skillsXp?.[key]) || 0;
         const row = document.createElement("div");
         row.className = "skill-meter";
 
@@ -939,8 +947,7 @@ function renderSkillCards() {
         track.className = "skill-meter__track";
         const fill = document.createElement("div");
         fill.className = "skill-meter__fill";
-        const cap = 99;
-        const pct = cap > 0 ? (Math.min(level, cap) / cap) * 100 : 0;
+        const pct = SKILL_XP_CAP > 0 ? (Math.min(skillXp, SKILL_XP_CAP) / SKILL_XP_CAP) * 100 : 0;
         fill.style.width = `${pct}%`;
         track.appendChild(fill);
 
