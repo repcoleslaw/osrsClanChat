@@ -1,0 +1,7 @@
+{
+  "name": "osrs-clan-hub-web",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/set-api-base.js"
+  }
+}

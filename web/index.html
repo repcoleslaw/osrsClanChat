@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OSRS Clan Hub</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Open+Sans:ital,wght@0,400;0,600;0,700;1,400&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="app-header__left">
+        <span class="app-header__title">OSRS Clan Hub</span>
+        <nav class="app-nav" aria-label="Primary">
+          <button type="button" class="app-nav__link is-active" data-nav-page="dashboard" aria-current="page">
+            Clan Dashboard
+          </button>
+          <button type="button" class="app-nav__link" data-nav-page="calculators">Calculators</button>
+        </nav>
+      </div>
+      <a class="app-header__account" href="#">My Account</a>
+    </header>
+
+    <main class="main-container">
+      <div id="page-dashboard" class="page page--active" aria-label="Clan Dashboard">
+        <div class="dashboard-layout">
+          <aside class="dashboard-col dashboard-col--members">
+            <h2 class="dashboard-col__heading">Clan Members</h2>
+            <section class="card card--panel">
+              <h3 class="card__subtitle">Set Players in Clan</h3>
+              <p class="muted card__lede">Clan name and up to five OSRS usernames. Save, then sync hiscores from the clan column.</p>
+              <form id="clan-form">
+                <label>
+                  Clan name
+                  <input id="clan-name" type="text" maxlength="40" required placeholder="Example: Infernal Seekers" />
+                </label>
+
+                <div class="players-grid" id="players-grid"></div>
+
+                <div class="actions">
+                  <button type="submit">Save Clan</button>
+                  <button id="refresh-all" type="button">Refresh All Hiscores</button>
+                </div>
+              </form>
+            </section>
+          </aside>
+
+          <section class="dashboard-col dashboard-col--clan">
+            <h2 class="dashboard-col__heading" id="clan-title">Clan</h2>
+            <p class="muted dashboard-col__hint">
+              Switch between player cards and a per-skill clan highscore table (ranks use synced hiscore data).
+            </p>
+            <div class="clan-tabs" role="tablist" aria-label="Clan view">
+              <button type="button" class="clan-tab is-active" role="tab" id="clan-tab-cards" aria-controls="clan-panel-cards" aria-selected="true">
+                Player cards
+              </button>
+              <button type="button" class="clan-tab" role="tab" id="clan-tab-highscores" aria-controls="clan-panel-highscores" aria-selected="false">
+                Clan highscores
+              </button>
+            </div>
+            <div id="clan-panel-cards" role="tabpanel" class="clan-tab-panel" aria-labelledby="clan-tab-cards">
+              <div id="skill-cards" class="clan-player-grid"></div>
+            </div>
+            <div id="clan-panel-highscores" role="tabpanel" class="clan-tab-panel" hidden aria-labelledby="clan-tab-highscores">
+              <div id="clan-highscores-root"></div>
+            </div>
+          </section>
+
+          <aside class="dashboard-col dashboard-col--bounty">
+            <h2 class="dashboard-col__heading">Clan Bounty Board</h2>
+            <section class="card card--panel bounty-board">
+              <div id="bounty-mount" aria-live="polite"></div>
+            </section>
+          </aside>
+        </div>
+      </div>
+
+      <div id="page-calculators" class="page" hidden aria-label="Calculators">
+        <section class="card card--wide">
+          <h2>Calculators</h2>
+          <p class="muted">OSRS calculator tools for your clan will be defined here.</p>
+        </section>
+      </div>
+    </main>
+
+    <template id="player-input-template">
+      <label>
+        Player <span class="index"></span>
+        <input class="player-name" type="text" maxlength="12" placeholder="OSRS username" />
+      </label>
+    </template>
+
+    <dialog id="bounty-modal" class="bounty-modal" aria-labelledby="bounty-modal-heading">
+      <div class="bounty-modal__inner">
+        <button type="button" class="bounty-modal__x" id="bounty-modal-x" aria-label="Close">&times;</button>
+        <h3 id="bounty-modal-heading" class="bounty-modal__heading">New bounty</h3>
+        <p id="bounty-modal-as" class="muted bounty-modal__as"></p>
+        <label class="bounty-modal__label">
+          Title
+          <input type="text" id="bounty-modal-title-input" maxlength="200" placeholder="Short title" autocomplete="off" />
+        </label>
+        <label class="bounty-modal__label">
+          Description
+          <textarea id="bounty-modal-description" maxlength="2000" rows="4" placeholder="What needs doing?"></textarea>
+        </label>
+        <div class="bounty-form-actions bounty-modal__actions">
+          <button type="button" id="bounty-modal-submit">Create</button>
+          <button type="button" id="bounty-modal-cancel" class="btn-secondary">Cancel</button>
+        </div>
+      </div>
+    </dialog>
+
+    <script src="api-config.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
