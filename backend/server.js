@@ -165,7 +165,8 @@ function sanitizeState(input) {
       message: String(p?.message || "").trim().slice(0, 240),
       updatedAt: p?.updatedAt ? String(p.updatedAt) : null,
       totalLevel: Number(p?.totalLevel) || 0,
-      skills: typeof p?.skills === "object" && p?.skills ? p.skills : {}
+      skills: typeof p?.skills === "object" && p?.skills ? p.skills : {},
+      skillsXp: typeof p?.skillsXp === "object" && p?.skillsXp ? p.skillsXp : {}
     });
 
     if (unique.length >= MAX_PLAYERS) break;
@@ -247,12 +248,18 @@ function idToString(v) {
 
 function playerForApi(p) {
   if (!p || typeof p !== "object") {
-    return { name: "", message: "", updatedAt: null, totalLevel: 0, skills: {} };
+    return { name: "", message: "", updatedAt: null, totalLevel: 0, skills: {}, skillsXp: {} };
   }
   const skills = {};
+  const skillsXp = {};
   if (p.skills && typeof p.skills === "object") {
     for (const [k, v] of Object.entries(p.skills)) {
       skills[k] = Number(v) || 0;
+    }
+  }
+  if (p.skillsXp && typeof p.skillsXp === "object") {
+    for (const [k, v] of Object.entries(p.skillsXp)) {
+      skillsXp[k] = Number(v) || 0;
     }
   }
   return {
@@ -260,7 +267,8 @@ function playerForApi(p) {
     message: String(p.message || "").trim().slice(0, 240),
     updatedAt: p.updatedAt != null ? String(p.updatedAt) : null,
     totalLevel: Number(p.totalLevel) || 0,
-    skills
+    skills,
+    skillsXp
   };
 }
 
